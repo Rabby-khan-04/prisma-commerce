@@ -17,6 +17,8 @@
 
     // Best practices
     "strict": true,
+    "esModuleInterop": true,
+    "ignoreDeprecations": "6.0",
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
