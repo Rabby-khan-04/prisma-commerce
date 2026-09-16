@@ -20,7 +20,7 @@ export function generateResponse<T>(
   data: T,
   message: string = "Success",
   meta?: PaginationMeta,
-) {
+): ApiResponse<T> {
   return {
     success: true,
     message,

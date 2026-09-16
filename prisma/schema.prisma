@@ -50,7 +50,7 @@ model User {
   email     String   @unique @db.VarChar(255)
   phone     String
   password  String   @db.VarChar(255)
-  role      UserRole
+  role      UserRole @default(CUSTOMER)
   isActive  Boolean  @default(true) @map("is_active")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
