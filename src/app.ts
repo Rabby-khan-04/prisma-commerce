@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import { configCors } from "./config/cors";
+import router from "./routes";
 
 const app: Express = express();
 app.set("trust proxy", 1);
@@ -22,5 +23,7 @@ app.get("/api/v1/my-ip", async (req, res) => {
     ip: req.ip,
   });
 });
+
+app.use("/api/v1", router);
 
 export default app;
