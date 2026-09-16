@@ -1,10 +1,3 @@
-/*
-  Warnings:
-
-  - You are about to drop the `Post` table. If the table is not empty, all the data it contains will be lost.
-  - You are about to drop the `User` table. If the table is not empty, all the data it contains will be lost.
-
-*/
 -- CreateEnum
 CREATE TYPE "Gender" AS ENUM ('MALE', 'FEMALE', 'OTHER');
 
@@ -20,15 +13,6 @@ CREATE TYPE "OrderStatus" AS ENUM ('PENDING', 'PROCESSING', 'SHIPPED', 'DELIVERE
 -- CreateEnum
 CREATE TYPE "PaymentStatus" AS ENUM ('UNPAID', 'PAID', 'FAILED', 'REFUNDED');
 
--- DropForeignKey
-ALTER TABLE "Post" DROP CONSTRAINT "Post_authorId_fkey";
-
--- DropTable
-DROP TABLE "Post";
-
--- DropTable
-DROP TABLE "User";
-
 -- CreateTable
 CREATE TABLE "users" (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -40,7 +24,7 @@ CREATE TABLE "users" (
     "phone" TEXT NOT NULL,
     "password" VARCHAR(255) NOT NULL,
     "role" "UserRole" NOT NULL,
-    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "is_active" BOOLEAN NOT NULL DEFAULT true,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ NOT NULL,
 
@@ -123,7 +107,7 @@ CREATE TABLE "tags" (
     "id" SERIAL NOT NULL,
     "name" VARCHAR(100) NOT NULL,
     "slug" VARCHAR(100) NOT NULL,
-    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "is_active" BOOLEAN NOT NULL DEFAULT true,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ NOT NULL,
 
