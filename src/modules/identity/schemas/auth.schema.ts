@@ -3,6 +3,7 @@ import { z } from "../../../infra/middleware";
 export const userRegistrationSchema = z.object({
   firstName: z.string().min(1, "Fist name is required").trim(),
   lastName: z.string().min(1, "Last name is required").trim(),
+  username: z.string().min(1, "Last name is required").trim(),
   gender: z.enum(["MALE", "FEMALE", "OTHER"]),
   email: z.email("Invalid email").toLowerCase().trim(),
   phone: z.string().max(11, "Must be a valid bangladeshi number").optional(),
