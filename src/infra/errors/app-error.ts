@@ -5,7 +5,7 @@ export class AppError extends Error {
 
   constructor(
     statusCode: number = 500,
-    code: string = "INTERNL_ERROR",
+    code: string = "INTERNAL_ERROR",
     message: string = "Something went wrong",
     isOperational: boolean = true,
   ) {

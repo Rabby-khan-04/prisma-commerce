@@ -9,7 +9,7 @@ export const formatZodErrors = (
 ): Array<{ field: string; message: string }> => {
   return error.issues.map((issue) => ({
     field: issue.path.join(".") || "root",
-    message: error.message,
+    message: issue.message,
   }));
 };
 
@@ -35,7 +35,7 @@ export const validate = <T extends z.ZodType>(
     } catch (error) {
       if (error instanceof ZodError) {
         const errs = formatZodErrors(error);
-        next(new ValidationError("Validation failed", errs));
+        return next(new ValidationError("Validation failed", errs));
       }
 
       next(error);
