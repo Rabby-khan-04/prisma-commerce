@@ -17,6 +17,14 @@ class UserService {
   async userCreate(data: Prisma.UserCreateInput) {
     return prisma.user.create({ data });
   }
+
+  async updateRefreshToken(id: string, token: string, expireAt: Date) {
+    return prisma.$executeRaw`
+      UPDATE "users"
+      SET "refresh_token" = ${token}, "refresh_token_expires_at" = ${expireAt}
+      WHERE id = ${id}::uuid
+      `;
+  }
 }
 
 export const userService = new UserService();

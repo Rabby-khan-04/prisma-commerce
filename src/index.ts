@@ -23,7 +23,7 @@ async function shutdown(signal: string) {
   await new Promise<void>((resolve) =>
     server ? server.close(() => resolve()) : resolve(),
   );
-  prisma.$disconnect();
+  await prisma.$disconnect();
   process.exit(0);
 }
 
