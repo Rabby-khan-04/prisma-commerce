@@ -19,4 +19,26 @@ export const vendorRegistrationSchema = userRegistrationSchema.extend({
   description: z.string().optional(),
 });
 
+export const userLoginSchema = z.preprocess(
+  (data: any) => {
+    if (data && typeof data === "object") {
+      if (!data.identifier && data.email) {
+        return { ...data, identifier: data.email };
+      }
+    }
+
+    return data;
+  },
+  z.object({
+    identifier: z
+      .string({ error: "Identifier is required" })
+      .min(1, "Email or username is required")
+      .trim(),
+    password: z
+      .string({ error: "Password is required" })
+      .min(1, "Password is required"),
+  }),
+);
+
 export type UserRegisterBody = z.infer<typeof userRegistrationSchema>;
+export type UserLoginBody = z.infer<typeof userLoginSchema>;

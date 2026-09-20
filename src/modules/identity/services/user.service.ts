@@ -14,6 +14,17 @@ class UserService {
       include: { vendor: true },
     });
   }
+
+  async findByIdentifier(identifier: string) {
+    const isEmail = identifier.includes("@");
+
+    if (isEmail) {
+      return this.findUserByEmail(identifier);
+    } else {
+      return this.findUserByUserName(identifier);
+    }
+  }
+
   async userCreate(data: Prisma.UserCreateInput) {
     return prisma.user.create({ data });
   }

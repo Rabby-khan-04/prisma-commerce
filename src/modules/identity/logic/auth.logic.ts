@@ -5,9 +5,13 @@ import {
   generateRefreshToken,
   generateToken,
 } from "../../../infra/auth/middleware";
-import { ConflictError } from "../../../infra/errors/app-error";
+import {
+  AuthenticationError,
+  ConflictError,
+  NotFoundError,
+} from "../../../infra/errors/app-error";
 import { generateResponse } from "../../../infra/utils/response";
-import type { UserRegisterBody } from "../schemas/auth.schema";
+import type { UserLoginBody, UserRegisterBody } from "../schemas/auth.schema";
 import { userService } from "../services/user.service";
 
 const SALT_ROUND = 12;
@@ -70,12 +74,47 @@ export async function userRegister(body: UserRegisterBody) {
   );
 
   return generateResponse(
-    { user: SanitizedUser(user), accessToken, refreshToken },
+    { user: sanitizedUser(user), accessToken, refreshToken },
     "User created successfully",
   );
 }
 
-function SanitizedUser(user: Record<string, unknown>) {
+export async function userLogin(body: UserLoginBody) {
+  const { identifier, password } = body;
+  const user = await userService.findByIdentifier(identifier);
+
+  if (!user) {
+    throw new NotFoundError("User", identifier);
+  }
+
+  const isValidPassword = await bcrypt.compare(password, user.password);
+
+  if (!isValidPassword) {
+    throw new AuthenticationError("Invalid email/username or password");
+  }
+
+  const payload: JwtPayload = {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    phone: user.phone,
+  };
+
+  const { refreshToken, accessToken } = generateTokens(payload);
+
+  await userService.updateRefreshToken(
+    user.id,
+    refreshToken,
+    getRefreshTokenExpire(),
+  );
+
+  return generateResponse(
+    { user: sanitizedUser(user), accessToken, refreshToken },
+    "User logged in successfully",
+  );
+}
+
+function sanitizedUser(user: Record<string, unknown>) {
   const { password, refreshToken, refreshTokenExpiresAt, ...rest } = user;
 
   return rest;
