@@ -76,7 +76,7 @@ export async function userRegister(body: UserRegisterBody) {
 }
 
 function SanitizedUser(user: Record<string, unknown>) {
-  const { password, ...rest } = user;
+  const { password, refreshToken, refreshTokenExpiresAt, ...rest } = user;
 
   return rest;
 }

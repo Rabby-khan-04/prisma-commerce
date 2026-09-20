@@ -1,4 +1,10 @@
 import type { NextFunction, Request, Response } from "express";
+import {
+  ACCESS_TOKEN_COOKIE,
+  accessCookieOptions,
+  REFRESH_TOKEN_COOKIE,
+  refreshCookieOptions,
+} from "../../config/cookies";
 import type { AuthenticatedRequest } from "../auth";
 
 export const resourceController =
@@ -22,6 +28,35 @@ export const resourceController =
     } catch (error) {
       return next(error);
     }
+  };
+
+export const authResourceController =
+  (
+    controller: (
+      body: any,
+      query: any,
+      user?: AuthenticatedRequest["user"],
+    ) => Promise<any>,
+    status: number = 200,
+  ) =>
+  async (req: Request, res: Response, next: NextFunction) => {
+    const authReq = req as AuthenticatedRequest;
+    const result = await controller(authReq.body, authReq.query, authReq.user);
+    const { refreshToken, accessToken, ...restData } = result.data ?? {};
+
+    if (result && typeof result === "object" && "data" in result) {
+      if (refreshToken) {
+        res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, refreshCookieOptions);
+      }
+
+      if (accessToken) {
+        res.cookie(ACCESS_TOKEN_COOKIE, accessToken, accessCookieOptions);
+      }
+
+      result.data = restData;
+    }
+
+    return res.status(status).json(result);
   };
 
 export const resourcesController =

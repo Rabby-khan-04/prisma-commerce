@@ -1,3 +1,4 @@
+import cookieParser from "cookie-parser";
 import express, { type Express } from "express";
 import { configCors } from "./config/cors";
 import { errorHandler, notFoundError } from "./infra/errors/error-handlers";
@@ -7,6 +8,7 @@ const app: Express = express();
 app.set("trust proxy", 1);
 
 app.use(configCors());
+app.use(cookieParser());
 app.use(express.json({ limit: "16kb" }));
 app.use(express.urlencoded({ extended: true, limit: "16kb" }));
 
