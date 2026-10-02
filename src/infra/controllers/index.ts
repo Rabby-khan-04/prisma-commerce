@@ -36,12 +36,18 @@ export const authResourceController =
       body: any,
       query: any,
       user?: AuthenticatedRequest["user"],
+      cookies?: any,
     ) => Promise<any>,
     status: number = 200,
   ) =>
   async (req: Request, res: Response, next: NextFunction) => {
     const authReq = req as AuthenticatedRequest;
-    const result = await controller(authReq.body, authReq.query, authReq.user);
+    const result = await controller(
+      authReq.body,
+      authReq.query,
+      authReq.user,
+      authReq.cookies,
+    );
     const { refreshToken, accessToken, ...restData } = result.data ?? {};
 
     if (result && typeof result === "object" && "data" in result) {

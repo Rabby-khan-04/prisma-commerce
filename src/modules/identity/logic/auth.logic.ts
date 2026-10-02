@@ -4,17 +4,22 @@ import type { JwtPayload } from "../../../infra/auth";
 import {
   generateRefreshToken,
   generateToken,
+  verifyToken,
 } from "../../../infra/auth/middleware";
 import {
   AuthenticationError,
   ConflictError,
-  NotFoundError,
 } from "../../../infra/errors/app-error";
 import { generateResponse } from "../../../infra/utils/response";
 import type { UserLoginBody, UserRegisterBody } from "../schemas/auth.schema";
 import { userService } from "../services/user.service";
 
 const SALT_ROUND = 12;
+
+// A valid bcrypt hash used only to keep the "unknown user" login path as slow
+// as the "wrong password" path, so response timing does not leak account existence.
+const DUMMY_PASSWORD_HASH =
+  "$2b$12$qXIgK57QhloZNpkufoeXh.xpebzpYdnvUCgi47m5/6Mw6dW76FGnu";
 
 export function generateTokens(payload: JwtPayload): {
   refreshToken: string;
@@ -58,12 +63,7 @@ export async function userRegister(body: UserRegisterBody) {
     username: body.username,
   });
 
-  const payload: JwtPayload = {
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    phone: user.phone,
-  };
+  const payload = buildTokenPayload(user);
 
   const { refreshToken, accessToken } = generateTokens(payload);
 
@@ -83,22 +83,16 @@ export async function userLogin(body: UserLoginBody) {
   const { identifier, password } = body;
   const user = await userService.findByIdentifier(identifier);
 
-  if (!user) {
-    throw new NotFoundError("User", identifier);
-  }
+  const isValidPassword = await bcrypt.compare(
+    password,
+    user?.password ?? DUMMY_PASSWORD_HASH,
+  );
 
-  const isValidPassword = await bcrypt.compare(password, user.password);
-
-  if (!isValidPassword) {
+  if (!user || !isValidPassword) {
     throw new AuthenticationError("Invalid email/username or password");
   }
 
-  const payload: JwtPayload = {
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    phone: user.phone,
-  };
+  const payload = buildTokenPayload(user);
 
   const { refreshToken, accessToken } = generateTokens(payload);
 
@@ -114,10 +108,77 @@ export async function userLogin(body: UserLoginBody) {
   );
 }
 
+export async function refreshAccessToken(
+  _body: unknown,
+  _query: unknown,
+  _user: unknown,
+  cookies: { accessToken: string; refreshToken: string },
+) {
+  const decoded = verifyToken(cookies.refreshToken, env.JWT_REFRESH_SECRET);
+  const user = await userService.findUserById(decoded.id);
+
+  if (!user?.isActive) {
+    throw new AuthenticationError("Account disabled");
+  }
+
+  if (!user || user.refreshToken !== cookies.refreshToken) {
+    throw new AuthenticationError("Invalid refresh token");
+  }
+
+  if (!user.refreshTokenExpiresAt || user.refreshTokenExpiresAt < new Date()) {
+    await userService.updateRefreshToken(user.id, null, null);
+    throw new AuthenticationError("Refresh token expired");
+  }
+
+  const payload = buildTokenPayload(user);
+  const { refreshToken, accessToken } = generateTokens(payload);
+
+  // rotate refresh token
+  await userService.updateRefreshToken(
+    user.id,
+    refreshToken,
+    getRefreshTokenExpire(),
+  );
+
+  return generateResponse(
+    { accessToken, refreshToken },
+    "Access token refreshed successfully",
+  );
+}
+
+export async function logout(
+  _body: unknown,
+  _query: unknown,
+  _user: unknown,
+  cookies: { accessToken: string; refreshToken: string },
+) {
+  const decoded = verifyToken(cookies.refreshToken, env.JWT_REFRESH_SECRET);
+  const user = await userService.findUserById(decoded.id);
+
+  if (!user || user.refreshToken !== cookies.refreshToken) {
+    throw new AuthenticationError("Invalid refresh token");
+  }
+
+  await userService.updateRefreshToken(user.id, null, null);
+  return generateResponse(
+    { accessToken: null, refreshToken: null },
+    "User logged out successfully",
+  );
+}
+
 function sanitizedUser(user: Record<string, unknown>) {
   const { password, refreshToken, refreshTokenExpiresAt, ...rest } = user;
 
   return rest;
+}
+
+function buildTokenPayload(user: JwtPayload) {
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    phone: user.phone,
+  };
 }
 
 type DurationUnit = "d" | "h" | "m" | "s";

@@ -35,10 +35,10 @@ export const validate = <T extends z.ZodType>(
     } catch (error) {
       if (error instanceof ZodError) {
         const errs = formatZodErrors(error);
-        next(new ValidationError("Validation failed", errs));
+        return next(new ValidationError("Validation failed", errs));
       }
 
-      next(error);
+      return next(error);
     }
   };
 };
