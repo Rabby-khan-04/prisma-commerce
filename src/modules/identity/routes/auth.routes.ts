@@ -1,7 +1,9 @@
 import { Router } from "express";
-import { authResourceController } from "../../../infra/controllers";
+import { authenticate } from "../../../infra/auth";
+import { controller } from "../../../infra/controllers";
 import { validate } from "../../../infra/middleware";
 import {
+  currentUser,
   logout,
   refreshAccessToken,
   userLogin,
@@ -16,16 +18,14 @@ const router = Router();
 
 router
   .route("/register")
-  .post(
-    validate(userRegistrationSchema, "body"),
-    authResourceController(userRegister, 201),
-  );
+  .post(validate(userRegistrationSchema, "body"), controller(userRegister));
 
 router
   .route("/login")
-  .post(validate(userLoginSchema, "body"), authResourceController(userLogin));
+  .post(validate(userLoginSchema, "body"), controller(userLogin));
 
-router.route("/refresh").post(authResourceController(refreshAccessToken));
-router.route("/logout").post(authResourceController(logout));
+router.route("/refresh").post(controller(refreshAccessToken));
+router.route("/logout").post(controller(logout));
+router.route("/me").get(authenticate, controller(currentUser));
 
 export default router;

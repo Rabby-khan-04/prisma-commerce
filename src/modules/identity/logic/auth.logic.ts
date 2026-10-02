@@ -2,15 +2,21 @@ import bcrypt from "bcryptjs";
 import { env } from "../../../config/env";
 import type { JwtPayload } from "../../../infra/auth";
 import {
+  REFRESH_TOKEN_COOKIE,
+  clearAuthCookies,
+  setAuthCookies,
+} from "../../../infra/auth/cookies";
+import {
   generateRefreshToken,
   generateToken,
   verifyToken,
-} from "../../../infra/auth/middleware";
+} from "../../../infra/auth/tokens";
+import type { ActionResult, RequestContext } from "../../../infra/controllers";
 import {
   AuthenticationError,
   ConflictError,
 } from "../../../infra/errors/app-error";
-import { generateResponse } from "../../../infra/utils/response";
+import { expiresAtFromDuration } from "../../../infra/utils/duration";
 import type { UserLoginBody, UserRegisterBody } from "../schemas/auth.schema";
 import { userService } from "../services/user.service";
 
@@ -39,16 +45,20 @@ export function generateTokens(payload: JwtPayload): {
   return { accessToken, refreshToken };
 }
 
-export async function userRegister(body: UserRegisterBody) {
+export async function userRegister(
+  ctx: RequestContext<UserRegisterBody>,
+): Promise<ActionResult> {
+  const body = ctx.body;
+
   const exist = await userService.findUserByEmail(body.email);
   if (exist) {
-    throw new ConflictError(`Email already exists`);
+    throw new ConflictError("Email already exists");
   }
 
   const existUserName = await userService.findUserByUserName(body.username);
-
-  if (existUserName)
+  if (existUserName) {
     throw new ConflictError(`Username ${body.username} already exists`);
+  }
 
   const hashPassword = await bcrypt.hash(body.password, SALT_ROUND);
 
@@ -63,26 +73,30 @@ export async function userRegister(body: UserRegisterBody) {
     username: body.username,
   });
 
-  const payload = buildTokenPayload(user);
-
-  const { refreshToken, accessToken } = generateTokens(payload);
+  const tokens = generateTokens(buildTokenPayload(user));
 
   await userService.updateRefreshToken(
     user.id,
-    refreshToken,
+    tokens.refreshToken,
     getRefreshTokenExpire(),
   );
 
-  return generateResponse(
-    { user: sanitizedUser(user), accessToken, refreshToken },
-    "User created successfully",
-  );
+  return {
+    data: { user: sanitizedUser(user) },
+    message: "User created successfully",
+    status: 201,
+    cookies: setAuthCookies(tokens),
+  };
 }
 
-export async function userLogin(body: UserLoginBody) {
-  const { identifier, password } = body;
+export async function userLogin(
+  ctx: RequestContext<UserLoginBody>,
+): Promise<ActionResult> {
+  const { identifier, password } = ctx.body;
   const user = await userService.findByIdentifier(identifier);
 
+  // Always compare, even when the user is missing, so both failure paths take
+  // comparable time and return an identical error.
   const isValidPassword = await bcrypt.compare(
     password,
     user?.password ?? DUMMY_PASSWORD_HASH,
@@ -92,36 +106,37 @@ export async function userLogin(body: UserLoginBody) {
     throw new AuthenticationError("Invalid email/username or password");
   }
 
-  const payload = buildTokenPayload(user);
-
-  const { refreshToken, accessToken } = generateTokens(payload);
+  const tokens = generateTokens(buildTokenPayload(user));
 
   await userService.updateRefreshToken(
     user.id,
-    refreshToken,
+    tokens.refreshToken,
     getRefreshTokenExpire(),
   );
 
-  return generateResponse(
-    { user: sanitizedUser(user), accessToken, refreshToken },
-    "User logged in successfully",
-  );
+  return {
+    data: { user: sanitizedUser(user) },
+    message: "User logged in successfully",
+    cookies: setAuthCookies(tokens),
+  };
 }
 
 export async function refreshAccessToken(
-  _body: unknown,
-  _query: unknown,
-  _user: unknown,
-  cookies: { accessToken: string; refreshToken: string },
-) {
-  const decoded = verifyToken(cookies.refreshToken, env.JWT_REFRESH_SECRET);
-  const user = await userService.findUserById(decoded.id);
-
-  if (!user?.isActive) {
-    throw new AuthenticationError("Account disabled");
+  ctx: RequestContext,
+): Promise<ActionResult> {
+  const refreshToken = ctx.cookies[REFRESH_TOKEN_COOKIE];
+  if (!refreshToken) {
+    throw new AuthenticationError("Refresh token missing");
   }
 
-  if (!user || user.refreshToken !== cookies.refreshToken) {
+  const decoded = verifyToken(refreshToken, env.JWT_REFRESH_SECRET);
+  const user = await userService.findUserById(decoded.id);
+
+  if (!user || !user.isActive) {
+    throw new AuthenticationError("Invalid refresh token");
+  }
+
+  if (user.refreshToken !== refreshToken) {
     throw new AuthenticationError("Invalid refresh token");
   }
 
@@ -130,40 +145,52 @@ export async function refreshAccessToken(
     throw new AuthenticationError("Refresh token expired");
   }
 
-  const payload = buildTokenPayload(user);
-  const { refreshToken, accessToken } = generateTokens(payload);
+  const tokens = generateTokens(buildTokenPayload(user));
 
-  // rotate refresh token
+  // Rotate the refresh token and persist the new one.
   await userService.updateRefreshToken(
     user.id,
-    refreshToken,
+    tokens.refreshToken,
     getRefreshTokenExpire(),
   );
 
-  return generateResponse(
-    { accessToken, refreshToken },
-    "Access token refreshed successfully",
-  );
+  return {
+    data: { user: sanitizedUser(user) },
+    message: "Access token refreshed successfully",
+    cookies: setAuthCookies(tokens),
+  };
 }
 
-export async function logout(
-  _body: unknown,
-  _query: unknown,
-  _user: unknown,
-  cookies: { accessToken: string; refreshToken: string },
-) {
-  const decoded = verifyToken(cookies.refreshToken, env.JWT_REFRESH_SECRET);
-  const user = await userService.findUserById(decoded.id);
+export async function currentUser(ctx: RequestContext): Promise<ActionResult> {
+  return {
+    data: { user: ctx.user },
+    message: "Current user",
+  };
+}
 
-  if (!user || user.refreshToken !== cookies.refreshToken) {
-    throw new AuthenticationError("Invalid refresh token");
+export async function logout(ctx: RequestContext): Promise<ActionResult> {
+  const refreshToken = ctx.cookies[REFRESH_TOKEN_COOKIE];
+
+  // Best-effort server-side revocation. Logout must stay idempotent, so any
+  // missing/invalid/expired token is ignored rather than rejected.
+  if (refreshToken) {
+    try {
+      const decoded = verifyToken(refreshToken, env.JWT_REFRESH_SECRET);
+      const user = await userService.findUserById(decoded.id);
+
+      if (user && user.refreshToken === refreshToken) {
+        await userService.updateRefreshToken(user.id, null, null);
+      }
+    } catch {
+      // ignore: clearing the cookies below is what matters.
+    }
   }
 
-  await userService.updateRefreshToken(user.id, null, null);
-  return generateResponse(
-    { accessToken: null, refreshToken: null },
-    "User logged out successfully",
-  );
+  return {
+    data: {},
+    message: "User logged out successfully",
+    cookies: clearAuthCookies(),
+  };
 }
 
 function sanitizedUser(user: Record<string, unknown>) {
@@ -172,7 +199,9 @@ function sanitizedUser(user: Record<string, unknown>) {
   return rest;
 }
 
-function buildTokenPayload(user: JwtPayload) {
+function buildTokenPayload(
+  user: Pick<JwtPayload, "id" | "email" | "role" | "phone">,
+): JwtPayload {
   return {
     id: user.id,
     email: user.email,
@@ -181,28 +210,6 @@ function buildTokenPayload(user: JwtPayload) {
   };
 }
 
-type DurationUnit = "d" | "h" | "m" | "s";
-
-function isDurationUnit(u: string | undefined): u is DurationUnit {
-  return u === "d" || u === "h" || u === "m" || u === "s";
-}
-
 export function getRefreshTokenExpire(): Date {
-  const expire = env.JWT_REFRESH_EXPIRE_AT;
-  const match = expire.match(/^(\d+)([dhms])$/);
-
-  if (!match || !isDurationUnit(match[2])) {
-    return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  }
-
-  const value = parseInt(match[1] as string);
-  const unit = match[2];
-  const ms: Record<DurationUnit, number> = {
-    d: 24 * 60 * 60 * 1000,
-    h: 60 * 60 * 1000,
-    m: 60 * 1000,
-    s: 1000,
-  };
-
-  return new Date(Date.now() + value * ms[unit]);
+  return expiresAtFromDuration(env.JWT_REFRESH_EXPIRE_AT, 7 * 24 * 60 * 60 * 1000);
 }
