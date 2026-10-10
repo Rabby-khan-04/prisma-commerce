@@ -2,15 +2,21 @@ import bcrypt from "bcryptjs";
 import { env } from "../../../config/env";
 import type { JwtPayload } from "../../../infra/auth";
 import {
+  clearAuthCookies,
+  REFRESH_TOKEN_COOKIE,
+  setAuthCookies,
+} from "../../../infra/auth/cookies";
+import {
   generateRefreshToken,
   generateToken,
   verifyToken,
 } from "../../../infra/auth/middleware";
+import type { ActionResult, RequestContext } from "../../../infra/controllers";
 import {
   AuthenticationError,
   ConflictError,
 } from "../../../infra/errors/app-error";
-import { generateResponse } from "../../../infra/utils/response";
+import { expiresAtFromDuration } from "../../../infra/utils/duration";
 import type { UserLoginBody, UserRegisterBody } from "../schemas/auth.schema";
 import { userService } from "../services/user.service";
 
@@ -39,7 +45,10 @@ export function generateTokens(payload: JwtPayload): {
   return { accessToken, refreshToken };
 }
 
-export async function userRegister(body: UserRegisterBody) {
+export async function userRegister(
+  ctx: RequestContext<UserRegisterBody>,
+): Promise<ActionResult> {
+  const body = ctx.body;
   const exist = await userService.findUserByEmail(body.email);
   if (exist) {
     throw new ConflictError(`Email already exists`);
@@ -63,23 +72,26 @@ export async function userRegister(body: UserRegisterBody) {
     username: body.username,
   });
 
-  const payload = buildTokenPayload(user);
-
-  const { refreshToken, accessToken } = generateTokens(payload);
+  const tokens = generateTokens(buildTokenPayload(user));
 
   await userService.updateRefreshToken(
     user.id,
-    refreshToken,
+    tokens.refreshToken,
     getRefreshTokenExpire(),
   );
 
-  return generateResponse(
-    { user: sanitizedUser(user), accessToken, refreshToken },
-    "User created successfully",
-  );
+  return {
+    data: { user: sanitizedUser(user) },
+    message: "User created successfully",
+    status: 201,
+    cookies: setAuthCookies(tokens),
+  };
 }
 
-export async function userLogin(body: UserLoginBody) {
+export async function userLogin(
+  ctx: RequestContext<UserLoginBody>,
+): Promise<ActionResult> {
+  const body = ctx.body;
   const { identifier, password } = body;
   const user = await userService.findByIdentifier(identifier);
 
@@ -92,36 +104,37 @@ export async function userLogin(body: UserLoginBody) {
     throw new AuthenticationError("Invalid email/username or password");
   }
 
-  const payload = buildTokenPayload(user);
-
-  const { refreshToken, accessToken } = generateTokens(payload);
+  const tokens = generateTokens(buildTokenPayload(user));
 
   await userService.updateRefreshToken(
     user.id,
-    refreshToken,
+    tokens.refreshToken,
     getRefreshTokenExpire(),
   );
 
-  return generateResponse(
-    { user: sanitizedUser(user), accessToken, refreshToken },
-    "User logged in successfully",
-  );
+  return {
+    data: { user: sanitizedUser(user) },
+    message: "User logged in successfully",
+    status: 200,
+    cookies: setAuthCookies(tokens),
+  };
 }
 
 export async function refreshAccessToken(
-  _body: unknown,
-  _query: unknown,
-  _user: unknown,
-  cookies: { accessToken: string; refreshToken: string },
-) {
-  const decoded = verifyToken(cookies.refreshToken, env.JWT_REFRESH_SECRET);
+  ctx: RequestContext,
+): Promise<ActionResult> {
+  const refreshToken = ctx.cookies[REFRESH_TOKEN_COOKIE];
+
+  if (!refreshToken) throw new AuthenticationError("Refresh token missing");
+
+  const decoded = verifyToken(refreshToken, env.JWT_REFRESH_SECRET);
   const user = await userService.findUserById(decoded.id);
 
-  if (!user?.isActive) {
-    throw new AuthenticationError("Account disabled");
+  if (!user || !user?.isActive) {
+    throw new AuthenticationError("Invalid refresh token");
   }
 
-  if (!user || user.refreshToken !== cookies.refreshToken) {
+  if (user.refreshToken !== refreshToken) {
     throw new AuthenticationError("Invalid refresh token");
   }
 
@@ -130,40 +143,41 @@ export async function refreshAccessToken(
     throw new AuthenticationError("Refresh token expired");
   }
 
-  const payload = buildTokenPayload(user);
-  const { refreshToken, accessToken } = generateTokens(payload);
+  const tokens = generateTokens(buildTokenPayload(user));
 
   // rotate refresh token
   await userService.updateRefreshToken(
     user.id,
-    refreshToken,
+    tokens.refreshToken,
     getRefreshTokenExpire(),
   );
 
-  return generateResponse(
-    { accessToken, refreshToken },
-    "Access token refreshed successfully",
-  );
+  return {
+    data: { user: ctx.user },
+    message: "Access token refresh successfully",
+    cookies: setAuthCookies(tokens),
+  };
 }
 
-export async function logout(
-  _body: unknown,
-  _query: unknown,
-  _user: unknown,
-  cookies: { accessToken: string; refreshToken: string },
-) {
-  const decoded = verifyToken(cookies.refreshToken, env.JWT_REFRESH_SECRET);
-  const user = await userService.findUserById(decoded.id);
-
-  if (!user || user.refreshToken !== cookies.refreshToken) {
-    throw new AuthenticationError("Invalid refresh token");
+export async function logout(ctx: RequestContext): Promise<ActionResult> {
+  const refreshToken = ctx.cookies[REFRESH_TOKEN_COOKIE];
+  if (refreshToken) {
+    try {
+      const decoded = verifyToken(refreshToken, env.JWT_REFRESH_SECRET);
+      const user = await userService.findUserById(decoded.id);
+      if (user && user.refreshToken === refreshToken) {
+        await userService.updateRefreshToken(user.id, null, null);
+      }
+    } catch (error) {
+      console.error(error);
+    }
   }
 
-  await userService.updateRefreshToken(user.id, null, null);
-  return generateResponse(
-    { accessToken: null, refreshToken: null },
-    "User logged out successfully",
-  );
+  return {
+    data: {},
+    message: "User logged out successfully",
+    cookies: clearAuthCookies(),
+  };
 }
 
 function sanitizedUser(user: Record<string, unknown>) {
@@ -181,28 +195,9 @@ function buildTokenPayload(user: JwtPayload) {
   };
 }
 
-type DurationUnit = "d" | "h" | "m" | "s";
-
-function isDurationUnit(u: string | undefined): u is DurationUnit {
-  return u === "d" || u === "h" || u === "m" || u === "s";
-}
-
 export function getRefreshTokenExpire(): Date {
-  const expire = env.JWT_REFRESH_EXPIRE_AT;
-  const match = expire.match(/^(\d+)([dhms])$/);
-
-  if (!match || !isDurationUnit(match[2])) {
-    return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  }
-
-  const value = parseInt(match[1] as string);
-  const unit = match[2];
-  const ms: Record<DurationUnit, number> = {
-    d: 24 * 60 * 60 * 1000,
-    h: 60 * 60 * 1000,
-    m: 60 * 1000,
-    s: 1000,
-  };
-
-  return new Date(Date.now() + value * ms[unit]);
+  return expiresAtFromDuration(
+    env.JWT_REFRESH_EXPIRE_AT,
+    7 * 24 * 60 * 60 * 1000,
+  );
 }
