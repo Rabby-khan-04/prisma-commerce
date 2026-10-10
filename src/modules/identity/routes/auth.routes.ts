@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authResourceController } from "../../../infra/controllers";
+import { controller } from "../../../infra/controllers";
 import { validate } from "../../../infra/middleware";
 import {
   logout,
@@ -18,14 +18,14 @@ router
   .route("/register")
   .post(
     validate(userRegistrationSchema, "body"),
-    authResourceController(userRegister, 201),
+    controller(userRegister, { status: 201 }),
   );
 
 router
   .route("/login")
-  .post(validate(userLoginSchema, "body"), authResourceController(userLogin));
+  .post(validate(userLoginSchema, "body"), controller(userLogin));
 
-router.route("/refresh").post(authResourceController(refreshAccessToken));
-router.route("/logout").post(authResourceController(logout));
+router.route("/refresh").post(controller(refreshAccessToken));
+router.route("/logout").post(controller(logout));
 
 export default router;

@@ -1,126 +1,62 @@
 import type { NextFunction, Request, Response } from "express";
-import {
-  ACCESS_TOKEN_COOKIE,
-  accessCookieOptions,
-  REFRESH_TOKEN_COOKIE,
-  refreshCookieOptions,
-} from "../../config/cookies";
-import type { AuthenticatedRequest } from "../auth";
+import type { AuthenticatedRequest, JwtPayload } from "../auth";
+import { applyCookieDirectives, type CookieDirective } from "../auth/cookies";
+import { generateResponse, type PaginationMeta } from "../utils/response";
 
-export const resourceController =
-  (
-    controller: (
-      body: any,
-      query: any,
-      user?: AuthenticatedRequest["user"],
-    ) => Promise<unknown>,
-    status: number = 200,
-  ) =>
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const authReq = req as AuthenticatedRequest;
-      const result = await controller(
-        authReq.body,
-        authReq.query,
-        authReq.user,
-      );
-      return res.status(status).json(result);
-    } catch (error) {
-      return next(error);
-    }
-  };
-
-export const authResourceController =
-  (
-    controller: (
-      body: any,
-      query: any,
-      user?: AuthenticatedRequest["user"],
-      cookies?: any,
-    ) => Promise<any>,
-    status: number = 200,
-  ) =>
-  async (req: Request, res: Response, next: NextFunction) => {
-    const authReq = req as AuthenticatedRequest;
-    const result = await controller(
-      authReq.body,
-      authReq.query,
-      authReq.user,
-      authReq.cookies,
-    );
-    const { refreshToken, accessToken, ...restData } = result.data ?? {};
-
-    if (result && typeof result === "object" && "data" in result) {
-      if (refreshToken) {
-        res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, refreshCookieOptions);
-      }
-
-      if (accessToken) {
-        res.cookie(ACCESS_TOKEN_COOKIE, accessToken, accessCookieOptions);
-      }
-
-      result.data = restData;
-    }
-
-    return res.status(status).json(result);
-  };
-
-export const resourcesController =
-  (
-    controller: (req: AuthenticatedRequest) => Promise<unknown>,
-    status: number = 200,
-  ) =>
-  async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const result = await controller(req as AuthenticatedRequest);
-      return res.status(status).json(result);
-    } catch (error) {
-      return next(error);
-    }
-  };
-
-export interface GetControllerInput<T = Record<string, any>> {
-  id: number | string;
-  page?: number | string;
-  limit?: number | string;
-  other: T;
-  user?: AuthenticatedRequest["user"];
+export interface RequestContext<
+  B = unknown,
+  Q = unknown,
+  P = Record<string, string>,
+> {
+  body: B;
+  query: Q;
+  params: P;
+  cookies: Record<string, string | undefined>;
+  user?: JwtPayload;
 }
 
-const parseQueryParams = (value: unknown) => {
-  if (typeof value === "string") return value;
+export interface ActionResult<T = unknown> {
+  data: T;
+  message?: string;
+  meta?: PaginationMeta;
+  status?: number;
+  cookies?: CookieDirective[];
+}
 
-  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
-
-  return;
-};
-
-export const getController =
-  (
-    controller: (input: GetControllerInput) => Promise<any>,
-    requiredId?: boolean,
-    needString?: boolean,
+export const controller =
+  <B = unknown, Q = unknown, P = Record<string, string>>(
+    handler: (ctx: RequestContext<B, Q, P>) => Promise<ActionResult | void>,
+    options: { status?: number } = {},
   ) =>
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { id, page, limit, ...other } = req.query;
+      const ctx: RequestContext = {
+        body: req.body,
+        query: req.query,
+        params: req.params as Record<string, string>,
+        cookies: req.cookies,
+        user: (req as AuthenticatedRequest).user,
+      };
 
-      const parsedId = parseQueryParams(id);
+      const result = await handler(ctx as RequestContext<B, Q, P>);
 
-      if (requiredId && !parsedId) {
-        throw new Error("Id is required");
+      if (!result) return res.status(204).send();
+
+      if (result.cookies?.length) {
+        applyCookieDirectives(res, result.cookies);
       }
 
-      const authReq = req as AuthenticatedRequest;
-      const result = await controller({
-        id: needString ? (parsedId ?? "") : Number(parsedId),
-        page: page as string | undefined,
-        limit: limit as string | undefined,
-        other: other,
-        user: authReq.user,
-      });
+      const status = result?.status ?? options.status ?? 200;
 
-      return res.json(result);
+      return res
+        .status(status)
+        .json(
+          generateResponse(
+            result?.data,
+            result?.message ?? "Success",
+            result?.meta,
+          ),
+        );
     } catch (error) {
       return next(error);
     }
